@@ -1,111 +1,63 @@
-#include <Wire.h>  // Biblioteca para comunicação I2C
+#include <Wire.h>              // Biblioteca para comunicação I2C
+#include <Adafruit_AHTX0.h>   // Biblioteca para o sensor AHT20
+#include "ScioSense_ENS160.h" // Biblioteca para o sensor ENS160
 
-int ArduinoLED = 2; // Pino do LED embutido no Arduino
+// Instância dos sensores
+Adafruit_AHTX0 aht;
+ScioSense_ENS160 ens160(ENS160_I2CADDR_1); // Endereço padrão do ENS160
 
-///// Início da configuração do AHT20
-#include <Adafruit_AHTX0.h>  // Biblioteca do sensor de temperatura e umidade AHT20
+// Variáveis globais para armazenar as leituras
+float temperatura; // Armazena a temperatura em °C
+int umidade;       // Armazena a umidade relativa (%)
+int eCO2;         // Armazena a concentração de CO2 equivalente (ppm)
+int aqi;          // Índice de Qualidade do Ar
+int tvoc;         // Composto Orgânico Volátil Total (ppb)
 
-Adafruit_AHTX0 aht;  // Objeto para comunicação com o sensor AHT20
-
-// Variáveis para armazenar as leituras do sensor AHT20
-float temperatura;  // Armazena a temperatura em graus Celsius
-int umidade;        // Armazena a umidade relativa do ar
-
-///// Fim da configuração do AHT20
-
-#include "ScioSense_ENS160.h"  // Biblioteca do sensor de qualidade do ar ENS160
-ScioSense_ENS160 ens160(ENS160_I2CADDR_1); // Objeto para comunicação com o sensor ENS160
-
-// Variáveis para armazenar os dados do ENS160
-int aqi;   // Índice de qualidade do ar (Air Quality Index)
-int tvoc;  // Compostos orgânicos voláteis totais (Total Volatile Organic Compounds) em ppb
-int eCO2;  // Nível estimado de CO2 equivalente em ppm
-
-/*--------------------------------------------------------------------------
-  FUNÇÃO SETUP
-  Configura os sensores e inicializa a comunicação
- --------------------------------------------------------------------------*/
 void setup() {
-  Serial.begin(9600); // Inicia a comunicação serial a 9600 bps
+  Serial.begin(9600); // Inicializa a comunicação serial
+  while (!Serial) {}  // Aguarda a inicialização do monitor serial
 
-  while (!Serial) {} // Aguarda até que a comunicação serial esteja disponível
-
-  // Configura o LED embutido como saída e o mantém apagado
-  pinMode(ArduinoLED, OUTPUT);
-  digitalWrite(ArduinoLED, LOW);
-
-  // Mensagens de inicialização no monitor serial
-  Serial.println("------------------------------------------------------------");
-  Serial.println("ENS160 - Sensor digital de qualidade do ar");
-  Serial.println();
-  Serial.println("Leitura do sensor no modo padrão");
-  Serial.println();
-  Serial.println("------------------------------------------------------------");
-  delay(1000);
-
-  Serial.print("Inicializando ENS160...");
-  ens160.begin(); // Inicializa o sensor ENS160
-  Serial.println(ens160.available() ? "concluído." : "falhou!");
-
-  if (ens160.available()) {
-    // Exibe as versões do firmware do ENS160
-    Serial.print("\tVersão: "); Serial.print(ens160.getMajorRev());
-    Serial.print("."); Serial.print(ens160.getMinorRev());
-    Serial.print("."); Serial.println(ens160.getBuild());
-  
-    // Configura o ENS160 no modo padrão de operação
-    Serial.print("\tModo padrão ");
-    Serial.println(ens160.setMode(ENS160_OPMODE_STD) ? "ativado." : "falhou!");
-  }
-
-  // Inicialização do sensor AHT20
-  Serial.println("Inicializando AHT10/AHT20...");
+  // Inicializa o sensor AHT20 (temperatura e umidade)
   if (!aht.begin()) {
-    Serial.println("Não foi possível encontrar o AHT! Verifique a fiação.");
-    while (1) delay(1000); // Loop infinito caso o sensor não seja encontrado
+    Serial.println("Erro: AHT20 não encontrado!");
+    while (1) delay(1000);
   }
-  Serial.println("Sensor AHT10 ou AHT20 detectado com sucesso.");
-} // Fim da função setup()
 
-/*--------------------------------------------------------------------------
-  FUNÇÃO LOOP PRINCIPAL
-  Executa medições a cada 1000ms
- --------------------------------------------------------------------------*/
+  // Inicializa o sensor ENS160 (qualidade do ar)
+  if (!ens160.begin()) {
+    Serial.println("Erro: ENS160 não encontrado!");
+    while (1) delay(1000);
+  }
+
+  // Configura o ENS160 no modo padrão de operação
+  ens160.setMode(ENS160_OPMODE_STD);
+}
+
 void loop() {
-  // Captura os dados do sensor AHT20
-  sensors_event_t humidity1, temp;
-  aht.getEvent(&humidity1, &temp); // Atualiza os valores de temperatura e umidade
-  temperatura = temp.temperature;  // Armazena a temperatura em graus Celsius
-  umidade = humidity1.relative_humidity; // Armazena a umidade relativa
+  // Captura temperatura e umidade do AHT20
+  sensors_event_t humidityEvent, tempEvent;
+  aht.getEvent(&humidityEvent, &tempEvent);
+  temperatura = tempEvent.temperature;
+  umidade = humidityEvent.relative_humidity;
 
-  // Exibe os valores lidos do AHT20 no monitor serial
-  Serial.print("Temperatura: "); 
-  Serial.print(temperatura); 
-  Serial.println(" °C");
-  Serial.print("Umidade: "); 
-  Serial.print(umidade); 
-  Serial.println("% rH");
+  // Envia os valores de temperatura e umidade para o ENS160
+  ens160.set_envdata(temperatura, umidade);
 
-  delay(1000); // Aguarda 1 segundo antes da próxima leitura
+  // Mede os dados de qualidade do ar
+  ens160.measure(true);
 
-  // Verifica se o ENS160 está disponível
-  if (ens160.available()) {
-    // Envia os valores de temperatura e umidade para o sensor ENS160
-    ens160.set_envdata(temperatura, umidade);
+  // Captura os valores do ENS160
+  aqi = ens160.getAQI();
+  tvoc = ens160.getTVOC();
+  eCO2 = ens160.geteCO2();
 
-    // Realiza medições
-    ens160.measure(true);
-    ens160.measureRaw(true);
+  // Exibe os dados no monitor serial
+  Serial.print("Temperatura: "); Serial.print(temperatura); Serial.println(" °C");
+  Serial.print("Umidade: "); Serial.print(umidade); Serial.println(" %");
+  Serial.print("AQI: "); Serial.print(aqi); Serial.println();
+  Serial.print("TVOC: "); Serial.print(tvoc); Serial.println(" ppb");
+  Serial.print("eCO2: "); Serial.print(eCO2); Serial.println(" ppm");
+  Serial.println("--------------------------");
 
-    // Captura os valores do sensor ENS160
-    aqi = ens160.getAQI();    // Índice de qualidade do ar -- 1 para muito bom, 5 para ruim--
-    tvoc = ens160.getTVOC();  // TVOC em ppb
-    eCO2 = ens160.geteCO2();  // eCO2 em ppm
-
-    // Exibe os valores do ENS160 no monitor serial
-    Serial.print("AQI: "); Serial.print(aqi); Serial.print("\t");
-    Serial.print("TVOC: "); Serial.print(tvoc); Serial.print(" ppb\t");
-    Serial.print("eCO2: "); Serial.print(eCO2); Serial.println(" ppm");
-  }
-  delay(1000); // Aguarda 1 segundo antes da próxima leitura
-} // Fim da função loop()
+  delay(5000); // Aguarda 5 segundos antes da próxima leitura
+}
