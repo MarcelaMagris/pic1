@@ -1,0 +1,97 @@
+#include <Wire.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+#define I2C_SLAVE_ADDR 8  // Endereço do ESP32 como Slave
+
+const char* ssid = "wifi"; 
+const char* password = "senha"; 
+const char* mqtt_server = "broker.hivemq.com";
+const int mqtt_port = 1883;
+const char* mqtt_topic = "pic1UFES/arbotec";
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+float temperatura = 0.0;
+int umidade = 0;
+int eCO2 = 0;
+bool dadosRecebidos = false;
+
+void setup_wifi() {
+    Serial.print("Conectando ao WiFi...");
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println(" Conectado!");
+}
+
+void reconnect() {
+    while (!client.connected()) {
+        Serial.print("Conectando ao MQTT...");
+        if (client.connect("ESP32_Arbotec")) {
+            Serial.println(" Conectado!");
+        } else {
+            Serial.print(" Falha, rc=");
+            Serial.print(client.state());
+            Serial.println(" Tentando novamente em 5 segundos...");
+            delay(5000);
+        }
+    }
+}
+
+void receiveEvent(int bytes) {
+    if (bytes == 12) { // 4 + 4 + 4 bytes
+        uint8_t buffer[12];
+        Wire.readBytes(buffer, sizeof(buffer));
+
+        memcpy(&temperatura, buffer, 4);
+        memcpy(&umidade, buffer + 4, 4);
+        memcpy(&eCO2, buffer + 8, 4);
+
+        dadosRecebidos = true;
+    } else {
+        Serial.print("Erro: Recebidos ");
+        Serial.print(bytes);
+        Serial.println(" bytes em vez de 12!");
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+
+    Wire.begin(I2C_SLAVE_ADDR);
+    Wire.onReceive(receiveEvent);
+
+    setup_wifi();
+    client.setServer(mqtt_server, mqtt_port);
+
+    Wire.onRequest([]() { Wire.write(1); }); // Responde com um byte quando requisitado
+
+}
+
+void loop() {
+    if (!client.connected()) {
+        reconnect();
+    }
+    client.loop();
+
+    // Serial.println(sizeof(temperatura));
+    // Serial.println(sizeof(umidade));
+    // Serial.println(sizeof(eCO2));
+
+    if (dadosRecebidos) {
+        String payload = String(temperatura, 2) + "," + 
+                         String(umidade) + "," + 
+                         String(eCO2);
+
+        Serial.println("Publicando: " + payload);
+        client.publish(mqtt_topic, payload.c_str());
+
+        dadosRecebidos = false; // Reseta a flag após publicação
+    }
+
+    delay(5000);
+}
