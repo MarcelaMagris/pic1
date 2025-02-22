@@ -1,0 +1,184 @@
+#include <Wire.h>
+#include <Adafruit_AHTX0.h>
+#include "ScioSense_ENS160.h"
+#include <Adafruit_NeoPixel.h>
+
+#define PIN_LED_TEMP 6
+#define PIN_LED_AQI 7
+#define NUM_LEDS 9
+
+#define PINO_FITA_PORTE 8
+#define NUM_LEDS_PORTE 3
+#define BOTAO 2 // Define o pino do botão
+
+Adafruit_NeoPixel stripTemp(NUM_LEDS, PIN_LED_TEMP, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel stripAQI(NUM_LEDS, PIN_LED_AQI, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel fita(NUM_LEDS_PORTE, PINO_FITA_PORTE, NEO_GRB + NEO_KHZ800);
+
+Adafruit_AHTX0 aht;
+ScioSense_ENS160 ens160(ENS160_I2CADDR_1);
+
+// Variáveis para controle
+float temperatura;
+int32_t umidade;  // Alterado para 4 bytes
+int32_t eCO2;     // Alterado para 4 bytes
+int aqi, tvoc;
+
+int porteArvore = 1;  // Altere esse valor para 1, 2 ou 3 manualmente
+int bttn = 0;  // Variável para indicar se o botão foi pressionado
+
+bool verificaConexaoESP32(byte endereco) {
+  Wire.beginTransmission(endereco);
+  return (Wire.endTransmission() == 0);  // Retorna true se a comunicação foi bem-sucedida
+}
+
+// Função para definir a cor dos LEDs da fita de temperatura
+void setCorTemp(int r, int g, int b) {
+  for (int i = 0; i < NUM_LEDS; i++) {
+    stripTemp.setPixelColor(i, stripTemp.Color(r, g, b));
+  }
+  stripTemp.show();
+}
+
+// Função para definir a cor dos LEDs da fita de qualidade do ar
+void setCorAQI(int r, int g, int b) {
+  for (int i = 0; i < NUM_LEDS; i++) {
+    stripAQI.setPixelColor(i, stripAQI.Color(r, g, b));
+  }
+  stripAQI.show();
+}
+
+void setup() {
+  Serial.begin(9600);
+  Wire.begin();  // Inicia como Master
+
+  pinMode(BOTAO, INPUT_PULLUP); // Configura o pino do botão como entrada com pull-up
+
+  // Inicializa as fitas LED
+  stripTemp.begin();
+  stripTemp.show();  // Inicializa os LEDs apagados
+  stripAQI.begin();
+  stripAQI.show();  // Inicializa os LEDs apagados
+  fita.begin();
+  fita.show();  // Inicializa os LEDs apagados
+
+  // Inicializa o sensor AHT20
+  if (!aht.begin()) {
+    Serial.println("Erro no AHT20!");
+    while (1)
+      ;
+  }
+
+  // Inicializa o sensor ENS160
+  if (!ens160.begin()) {
+    Serial.println("Erro no ENS160!");
+    while (1)
+      ;
+  }
+  ens160.setMode(ENS160_OPMODE_STD);
+}
+
+void loop() {
+  sensors_event_t humidityEvent, tempEvent;
+  aht.getEvent(&humidityEvent, &tempEvent);
+  temperatura = tempEvent.temperature;
+  umidade = humidityEvent.relative_humidity;
+
+  ens160.set_envdata(temperatura, umidade);
+  ens160.measure(true);
+
+  aqi = ens160.getAQI();
+  tvoc = ens160.getTVOC();
+  eCO2 = ens160.geteCO2();
+
+  Serial.print("Temp: ");
+  Serial.print(temperatura);
+  Serial.println(" °C");
+  Serial.print("Umidade: ");
+  Serial.print(umidade);
+  Serial.println("%");
+  Serial.print("AQI: ");
+  Serial.print(aqi);
+  Serial.print(" TVOC: ");
+  Serial.print(tvoc);
+  Serial.print(" eCO2: ");
+  Serial.println(eCO2);
+
+  if (verificaConexaoESP32(8)) {
+    Serial.println("ESP32 conectado.");
+  } else {
+    Serial.println("Falha na conexão com ESP32!");
+  }
+
+
+  // Enviar dados via I2C para ESP32
+  Wire.beginTransmission(8);  // Endereço do ESP32 Slave
+  // Criar um buffer de 12 bytes (4 para float, 4 para int, 4 para int)
+  uint8_t buffer[12];
+
+  memcpy(buffer, &temperatura, sizeof(temperatura));
+  memcpy(buffer + 4, &umidade, sizeof(umidade));
+  memcpy(buffer + 8, &eCO2, sizeof(eCO2));
+
+  Wire.write(buffer, sizeof(buffer));
+  Wire.endTransmission();
+
+  // Define a cor da fita LED de temperatura
+  if (temperatura >= 35) {
+    setCorTemp(255, 0, 0);  // Vermelho (muito quente)
+  } else if (temperatura >= 30) {
+    setCorTemp(255, 50, 0);  // Laranja (quente)
+  } else if (temperatura >= 25) {
+    setCorTemp(255, 120, 0);  // Amarelo (morno)
+  } else if (temperatura >= 20) {
+    setCorTemp(0, 255, 255);  // Azul claro (frio)
+  } else {
+    setCorTemp(0, 0, 255);  // Azul (muito frio)
+  }
+
+  // Define a cor da fita LED de qualidade do ar (AQI)
+  if (aqi == 5) {
+    setCorAQI(255, 0, 255);  // Roxo (muito ruim)
+  } else if (aqi == 4) {
+    setCorAQI(255, 0, 0);  // Vermelho (ruim)
+  } else if (aqi == 3) {
+    setCorAQI(255, 50, 0);  // Laranja (moderado)
+  } else if (aqi == 2) {
+    setCorAQI(0, 255, 0);  // Verde (bom)
+  } else if (aqi == 1) {
+    setCorAQI(0, 0, 255);  // Azul (muito bom)
+  }
+
+  fita.clear(); // Apaga todos os LEDs da fita
+
+  if (porteArvore == 1) {
+    fita.setPixelColor(0, fita.Color(255, 182, 193));  // Rosinha claro
+  } else if (porteArvore == 2) {
+    fita.setPixelColor(1, fita.Color(255, 105, 180));  // Rosa
+  } else if (porteArvore == 3) {
+    fita.setPixelColor(2, fita.Color(255, 20, 147));  // Rosa mais forte
+  }
+
+  fita.show(); // Atualiza os LEDs da fita
+
+  // Verifica se o botão foi pressionado
+  if (digitalRead(BOTAO) == LOW) { // LOW porque o pino é INPUT_PULLUP
+    bttn = 1; // Define bttn como 1 para indicar que o botão foi pressionado
+  }
+
+  // Se bttn for 1, incrementa porteArvore e reseta bttn
+  if (bttn == 1) {
+    porteArvore++;
+    if (porteArvore > 3) {
+      porteArvore = 1;
+    }
+    bttn = 0; // Reseta bttn para 0 após o incremento
+  }while (digitalRead(BOTAO) == LOW) {
+      // Faz nada enquanto o botão estiver pressionado
+    }
+    // Redefina o estado do botão para HIGH
+    pinMode(BOTAO, INPUT_PULLUP);
+
+
+  delay(5000);
+}
